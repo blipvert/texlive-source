@@ -120,6 +120,9 @@ main (int argc, string *argv)
   if (STREQ (output_name, "mf")) {
     fputs ("#define INIMF\n#define MF\n#define onlyMF\n", out);
     coerce = "mfcoerce.h";
+  } else if (STREQ (output_name, "mp")) {
+    fputs ("#define INIMP\n#define MP\n#define onlyMP\n", out);
+    coerce = "mpcoerce.h";
   } else if (STREQ (output_name, "mflua")) {
     fputs ("#define INIMF\n#define MF\n#define MFLua\n", out);
     coerce = "mfluacoerce.h";
