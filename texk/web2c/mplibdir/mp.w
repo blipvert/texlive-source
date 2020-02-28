@@ -24553,10 +24553,10 @@ hoping to understand the next part of this code.
 
 @<Declare the basic parsing subroutines@>=
 static void force_valid_tension_setting(MP mp) {
-  if ((mp->cur_exp.type != mp_known) || number_less(cur_exp_value_number (), min_tension)) {
+  if (mp->cur_exp.type != mp_known) {
     mp_value new_expr;
     const char *hlp[] = {
-               "The expression above should have been a number >=3/4.",
+               "The expression above should have been a number.",
                 NULL };
     memset(&new_expr,0,sizeof(mp_value));
     new_number(new_expr.data.n);

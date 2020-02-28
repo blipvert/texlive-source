@@ -782,7 +782,7 @@ maininit (int ac, string *av)
     kpse_reset_program_name ("mfluajit");
 #else
   /* If the program name is "mf-nowin", then reset the name as "mf". */
-  if (strncasecmp (kpse_invocation_name, "mf-nowin", 8) == 0)
+  if (strncasecmp (kpse_program_name, "mf-nowin", 8) == 0)
     kpse_reset_program_name ("mf");
 #endif
 #endif
