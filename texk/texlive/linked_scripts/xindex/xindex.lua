@@ -8,7 +8,7 @@
 -----------------------------------------------------------------------
 
         xindex = xindex or { }
- local version = 0.06
+ local version = 0.10
 xindex.version = version
 --xindex.self = "xindex"
 
@@ -43,8 +43,10 @@ local args = require ('xindex-lapp') [[
     -c,--config (default cfg)
     -e,--escapechar (default ")
     -n,--noheadings 
+    -a,--no_casesensitive
     -o,--output (default "")
     -l,--language (default en)
+    -p,--prefix (default L)
     <input> (string)
 ]]
 
@@ -58,6 +60,18 @@ local args = require ('xindex-lapp') [[
 
 vlevel = not args.v[1] and 0 or #args.v
 not_quiet = not args["quiet"]
+
+local luaVersion = _VERSION
+if (luaVersion < "Lua 5.3") then
+  print("=========================================")
+  print("Sorry. but we need at least LuaTeX 1.09")
+  print("Leaving program xindex")
+  print("=========================================")
+  os.exit()
+end
+
+--local inspect = require 'inspect' 
+--print(inspect(args))
 
 --[[
 if args.h then
@@ -129,6 +143,9 @@ end
 
 writeLog(2,"Using input file: "..inFile.."\n",0)
 
+labelPrefix = args.prefix
+writeLog(2,"Label prefix: "..labelPrefix.."\n",-1)
+
 writeLog(2,"Loading common config file ".."xindex-cfg-common\n",1)
 Config_File_Common = kpse.find_file("xindex-cfg-common.lua") 
 cfg_common = require(Config_File_Common)
@@ -154,6 +171,13 @@ index_header = indexheader[language]
 if vlevel > 0 then for i=1,#index_header do writeLog(2,index_header[i].."\n",1) end end
 page_folium = folium[language]
 
+
+no_caseSensitive = args["no_casesensitive"]
+if no_caseSensitive then
+  writeLog(1,"Sorting will be no case sensitive\n",1)
+else
+  writeLog(1,"Sorting will be case sensitive\n",1)
+end
 
 no_headings = args["noheadings"]
 if no_headings then

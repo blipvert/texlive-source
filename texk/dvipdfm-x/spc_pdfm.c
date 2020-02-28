@@ -1,6 +1,6 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2007-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2007-2019 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
@@ -1764,15 +1764,17 @@ spc_handler_pdfm_bgcolor (struct spc_env *spe, struct spc_arg *args)
   return  error;
 }
 
+#define THEBUFFLENGTH 1024
 static int
 spc_handler_pdfm_mapline (struct spc_env *spe, struct spc_arg *ap)
 {
   fontmap_rec *mrec;
   char        *map_name, opchr;
   int          error = 0;
-  static char  buffer[1024];
+  static char  buffer[THEBUFFLENGTH];
   const char  *p;
   char        *q;
+  int         count;
 
   skip_white(&ap->curptr, ap->endptr);
   if (ap->curptr >= ap->endptr) {
@@ -1800,8 +1802,16 @@ spc_handler_pdfm_mapline (struct spc_env *spe, struct spc_arg *ap)
   default:
     p = ap->curptr;
     q = buffer;
-    while (p < ap->endptr)
+    count = 0;
+    while (p < ap->endptr && count < THEBUFFLENGTH - 1) {
       *q++ = *p++;
+      count++;
+    }
+    if (count == THEBUFFLENGTH - 1) {
+      spc_warn(spe, "Invalid fontmap line: Too long a line.");
+      *q = 0;
+      return -1;
+    }
     *q = '\0';
     mrec = NEW(1, fontmap_rec);
     pdf_init_fontmap_record(mrec);
@@ -1906,25 +1916,32 @@ spc_handler_pdfm_tounicode (struct spc_env *spe, struct spc_arg *args)
   }
   RELEASE(cmap_name);
 
-  /* Additional "taint key" */
-  taint_keys = parse_pdf_object(&args->curptr, args->endptr, NULL);
-  if (taint_keys) {
-    if (PDF_OBJ_ARRAYTYPE(taint_keys)) {
-      int i;
-      for (i = 0; i < pdf_array_length(taint_keys); i++) {
-        pdf_obj *key;
+  /* Additional "taint key"
+   * An array of PDF name objects can be supplied optionally.
+   * Dictionary entries specified by this option will be added to the list
+   * of dictionary keys to be treated as the target of "ToUnicode" conversion.
+   */
+  skip_white(&args->curptr, args->endptr);
+  if (args->curptr < args->endptr) {
+    taint_keys = parse_pdf_object(&args->curptr, args->endptr, NULL);
+    if (taint_keys) {
+      if (PDF_OBJ_ARRAYTYPE(taint_keys)) {
+        int i;
+        for (i = 0; i < pdf_array_length(taint_keys); i++) {
+          pdf_obj *key;
         
-        key = pdf_get_array(taint_keys, i);
-        if (PDF_OBJ_NAMETYPE(key))
-          pdf_add_array(sd->cd.taintkeys, pdf_link_obj(key));
-        else {
-          spc_warn(spe, "Invalid argument specified in pdf:tounicode special.");
+          key = pdf_get_array(taint_keys, i);
+          if (PDF_OBJ_NAMETYPE(key))
+            pdf_add_array(sd->cd.taintkeys, pdf_link_obj(key));
+          else {
+            spc_warn(spe, "Invalid argument specified in pdf:tounicode special.");
+          }
         }
+      } else {
+        spc_warn(spe, "Invalid argument specified in pdf:unicode special.");
       }
-    } else {
-      spc_warn(spe, "Invalid argument specified in pdf:unicode special.");
+      pdf_release_obj(taint_keys);
     }
-    pdf_release_obj(taint_keys);
   }
 
   return 0;

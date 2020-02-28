@@ -1,6 +1,6 @@
 #!/usr/bin/env wish
 
-# Copyright 2017, 2018 Siep Kroonenberg
+# Copyright 2017-2019 Siep Kroonenberg
 
 # This file is licensed under the GNU General Public License version 2
 # or any later version.
@@ -11,7 +11,7 @@ package require Tk
 catch {rename send {}}
 
 # unix: make sure TL comes first on process searchpath
-# on windows, runscript takes care of this.
+# on windows, a wrapper takes care of this.
 if {$::tcl_platform(platform) ne "windows"} {
   set texbin [file dirname [file normalize [info script]]]
   set savedir [pwd]
@@ -27,18 +27,20 @@ if {$::tcl_platform(platform) ne "windows"} {
   unset texbin
   unset savedir
   unset dirs
-  # now is a good time to ask tlmgr for the _TL_ name of our platform
-  set ::our_platform [exec tlmgr print-platform]
 }
 
-# declarations and utilities shared with install-tl-gui.tcl
 set ::instroot [exec kpsewhich -var-value=TEXMFROOT]
+
+# declarations and utilities shared with install-tl-gui.tcl
 source [file join $::instroot "tlpkg" "tltcl" "tltcl.tcl"]
 
+# now is a good time to ask tlmgr for the _TL_ name of our platform
+set ::our_platform [exec -ignorestderr tlmgr print-platform]
+
 # searchpath and locale:
-# windows: most scripts run via [w]runscript, which adjusts the searchpath
+# windows: tlshell runs via a wrapper which adjusts the searchpath
 # for the current process.
-# tlshell.tcl should  be run via a symlink in a directory
+# others: tlshell.tcl should  be run via a symlink in a directory
 # which also contains (a symlink to) kpsewhich.
 # This directory will be prepended to the searchpath.
 # kpsewhich should disentangle symlinks.
@@ -131,6 +133,7 @@ proc long_message {str type {p "."}} {
     err_exit "Unsupported type $type for long_message"
   }
   create_dlg .tlmg $p
+  wm title .tlmg ""
 
   # wallpaper frame; see populate_main
   pack [ttk::frame .tlmg.bg] -fill both -expand 1
@@ -144,7 +147,7 @@ proc long_message {str type {p "."}} {
   if {$type eq "yesnocancel"} {
     ttk::button .tlmg.yes -text [__ "Yes"] -command "end_dlg \"yes\" .tlmg"
     ppack .tlmg.yes -in .tlmg.bts -side right
-    ttk::button .tlmg.no -text [__ "no"] -command "end_dlg \"no\" .tlmg"
+    ttk::button .tlmg.no -text [__ "No"] -command "end_dlg \"no\" .tlmg"
     ppack .tlmg.no -in .tlmg.bts -side right
   }
   if {$type eq "yesnocancel" || $type eq "okcancel"} {
@@ -214,6 +217,9 @@ proc selective_dis_enable {} {
   } elseif $::need_update_tlmgr {
     foreach b [list .mrk_inst .mrk_upd] {
       $b state disabled
+    }
+    if {$::tcl_platform(platform) eq "windows"} {
+      .upd_all state disabled
     }
   } elseif {!$::need_update_tlmgr} {
     .upd_tlmgr state disabled
@@ -353,10 +359,8 @@ proc start_tlmgr {{args ""}} {
 } ; # start_tlmgr
 
 proc close_tlmgr {} {
-  catch {chan close $::tlshl}
-  catch {chan close $::err}
-  set ::perlpid 0
-}; # close_tlmgr
+  run_cmd_waiting "quit"
+}
 
 # read a line of tlmgr output
 proc read_line {} {
@@ -364,12 +368,20 @@ proc read_line {} {
   # if it wants to wait for the command to finish
   set l "" ; # will contain the line to be read
   if {([catch {chan gets $::tlshl l} len] || [chan eof $::tlshl])} {
-    #do_debug "read_line: failing to read "
-    puts stderr "Read failure; tlmgr command was $::last_cmd"
-    if {! [catch {chan close $::tlshl}]} {set ::perlpid 0}
-    # note. the right way to terminate is terminating the GUI shell.
-    # This closes stdin of tlmgr shell.
-    err_exit
+    if [chan eof $::tlshl] {
+      catch {chan close $::tlshl}
+      catch {chan close $:err}
+      unset -nocomplain ::tlshl
+      unset -nocomplain ::err
+      set ::perlpid 0
+      set ::done_waiting 1
+    } else {
+      #do_debug "read_line: failing to read "
+      puts stderr "Read failure; tlmgr command was $::last_cmd"
+      # note. the normal way to terminate is terminating the GUI shell.
+      # This closes stdin of tlmgr shell.
+      err_exit
+    }
   } elseif {$len >= 0} {
     # do_debug "read: $l"
     if $::ddebug {puts $::flid $l}
@@ -522,18 +534,6 @@ proc run_cmd_waiting {cmd} {
 # display_packages_info is mostly invoked by collect_filtered, but
 # also when the search term or the search option changes.
 
-proc check_tlmgr_updatable {} {
-  run_cmd_waiting "update --self --list"
-  foreach l $::out_log {
-    if [regexp {^total-bytes[ \t]+([0-9]+)$} $l m b] {
-      do_debug "matches, $b"
-      set ::need_update_tlmgr [expr {$b > 0 ? 1 : 0}]
-      return
-    }
-  }
-  do_debug "check_tlmgr_uptodate: should not get here"
-} ; # check_tlmgr_uptodate
-
 proc is_updatable {nm} {
   set pk [dict get $::pkgs $nm]
   set lr [dict get $pk localrev]
@@ -547,16 +547,16 @@ proc update_globals {} {
   foreach nm [dict keys $::pkgs] {
     if [is_updatable $nm] {incr ::n_updates}
   }
-  check_tlmgr_updatable
+  set ::need_update_tlmgr [is_updatable texlive.infra]
   set ::tlshell_updatable [is_updatable tlshell]
 
   # also update displayed status info
   if {$::have_remote && $::need_update_tlmgr} {
-    .topf.luptodate configure -text [__ "Needs updating"]
+    .topfl.luptodate configure -text [__ "Needs updating"]
   } elseif $::have_remote {
-    .topf.luptodate configure -text [__ "Up to date"]
+    .topfl.luptodate configure -text [__ "Up to date"]
   } else {
-    .topf.luptodate configure -text [__ "Unknown"]
+    .topfl.luptodate configure -text [__ "Unknown"]
   }
   # ... and status of update buttons
   selective_dis_enable
@@ -743,7 +743,7 @@ proc get_packages_info_remote {} {
   }
   get_platforms
   set ::have_remote 1
-  .topf.loaded configure -text "Loaded" -foreground black
+  .topfl.loaded configure -text [__ "Loaded"] -foreground black
   update_globals
   return 1
 } ; # get_packages_info_remote
@@ -842,7 +842,7 @@ proc show_logs {} {
   # collect pages in notebook widget
   pack [ttk::notebook .tllg.logs] -in .tllg.bg -side top -fill both -expand 1
   .tllg.logs add .tllg.log -text [__ "Output"]
-  .tllg.logs add .tllg.err -text [__ "Errors"]
+  .tllg.logs add .tllg.err -text [__ "Other"]
   if $::ddebug {
     .tllg.logs add .tllg.dbg -text "Debug"
     raise .tllg.dbg .tllg.logs
@@ -1090,7 +1090,7 @@ proc repos_commit {} {
   }
   if $changes {
     set_repos_in_tlmgr
-    .topf.lrepos configure -text [print_repos]
+    .topfl.lrepos configure -text [print_repos]
     close_tlmgr
     start_tlmgr
     # reload remote package information
@@ -1208,6 +1208,7 @@ proc repository_dialog {} {
   ppack .tlr.abort -in .tlr.closebuttons -side right
   bind .tlr <Escape> {.tlr.abort invoke}
 
+  wm protocol .tlr WM_DELETE_WINDOW {.tlr.abort invoke}
   wm resizable .tlr 1 0
   place_dlg .tlr .
 } ; # repository_dialog
@@ -1516,21 +1517,42 @@ proc restore_backups_dialog {} {
 
 ##### package-related #####
 
+proc update_self_w32 {} {
+  if $::multiuser {
+    set mess \
+        [__ "Close this shell and run in an administrative command-prompt:"]
+  } else {
+    set mess [__ "Close this shell and run in a command-prompt:"]
+  }
+  set mess [string cat $mess "\n\ntlmgr update --self"]
+  tk_messageBox -message $mess
+  return
+}
+
 proc update_tlmgr {} {
   if {! $::need_update_tlmgr} {
     tk_messageBox -message [__ "Nothing to do!"]
+    return
+  }
+  if {$::tcl_platform(platform) eq "windows"} {
+    update_self_w32
     return
   }
   run_cmd "update --self" 1
   vwait ::done_waiting
   # tlmgr restarts itself automatically
   update_local_revnumbers
+  .topfr.linfra configure -text \
+      "tlmgr: r[dict get $::pkgs texlive.infra localrev]"
   collect_filtered
 } ; # update_tlmgr
 
 proc update_all {} {
   set updated_tlmgr 0
   if $::need_update_tlmgr {
+    if {$::tcl_platform(platform) eq "windows"} {
+      return ; # just to be sure; 'update all' button should be disabled
+    }
     run_cmd "update --self" 1
     vwait ::done_waiting
     # tlmgr restarts itself automatically
@@ -1594,8 +1616,10 @@ proc install_pkgs {sel_opt {pk ""}} {
     }
   }
   if {[llength $deps] > 0} {
-    set ans [any_message \
-        [__ "Also installing dependencies\n\n$deps.\n\nContinue?"] "okcancel"]
+    set ans \
+        [any_message \
+             [__ "Also installing dependencies\n\n%s" $deps] \
+             "okcancel"]
     if {$ans eq "cancel"} return
   }
   run_cmd "install $todo" 1
@@ -1657,7 +1681,7 @@ proc update_pkgs {sel_opt {pk ""}} {
         }
         if {[llength $deps] > 0} {
           set ans [any_message \
-              [__ "Updating hard dependencies %s anyway. Continue?" $deps] \
+              [__ "Updating some dependencies %s anyway. Continue?" $deps] \
                        "okcancel"]
           if {$ans eq "cancel"} return
         }
@@ -1723,7 +1747,7 @@ proc remove_pkgs {sel_opt {pk ""}} {
         }
         if {[llength $deps] > 0} {
           set ans [any_message \
-              [__ "Removing hard dependencies %s anyway. Continue?" $deps] \
+              [__ "Removing some dependencies %s anyway. Continue?" $deps] \
                        "okcancel"]
           if {$ans eq "cancel"} return
         }
@@ -1826,7 +1850,7 @@ proc set_paper {p} {
   run_cmd "paper paper $p" 1
 }
 
-proc set_language {l} {
+proc set_language_no_restart {l} {
   set ok 1
   if [catch {exec kpsewhich -var-value "TEXMFCONFIG"} d] {set ok 0}
   if $ok {
@@ -1858,12 +1882,16 @@ proc set_language {l} {
     }
     catch {chan close $fid}
   }
-  if $ok {
+  return $ok
+} ; # set_language_no_restart
+
+proc set_language {l} {
+  if [set_language_no_restart $l] {
     restart_self
   } else {
     tk_messageBox -message [__ "Cannot set default GUI language"] -icon error
   }
-} ; # set_language
+}
 
 ##### running external commands #####
 
@@ -1989,14 +2017,14 @@ proc populate_main {} {
   menu .mn.opt
   set inx -1
   incr inx
-  .mn.opt add command -label "[__ "Repositories"]..." \
+  .mn.opt add command -label "[__ "Repositories"] ..." \
       -command repository_dialog
 
   incr inx
-  .mn.opt add cascade -label [__ "Paper"] -menu .mn.opt.paper
+  .mn.opt add cascade -label [__ "Paper ..."] -menu .mn.opt.paper
   incr inx
   menu .mn.opt.paper
-  foreach p [list a4 letter] {
+  foreach p [list A4 letter] {
     .mn.opt.paper add command -label $p -command "set_paper $p"
   }
 
@@ -2005,25 +2033,27 @@ proc populate_main {} {
     .mn.opt add cascade -label [__ "GUI language (restarts tlshell)"] \
         -menu .mn.opt.lang
     menu .mn.opt.lang
-    foreach l $::langs {
-      .mn.opt.lang add command -label $l -command "set_language $l"
+    foreach l [lsort $::langs] {
+      if {$l eq $::lang} {
+        .mn.opt.lang add command -label "$l *"
+      } else {
+        .mn.opt.lang add command -label "$l" -command "set_language $l"
+      }
     }
   }
 
   if {$::tcl_platform(platform) ne "windows"} {
     incr inx
     set ::inx_platforms $inx
-    .mn.opt add command -label "[__ "Platforms"]..." -command platforms_select
+    .mn.opt add command -label "[__ "Platforms"] ..." -command platforms_select
   }
 
   .mn add cascade -label [__ "Help"] -menu .mn.help -underline 0
   menu .mn.help
   .mn.help add command -label [__ "About"] -command {
-    tk_messageBox -message [__ "\u00a9 2017, 2018 Siep Kroonenberg
+    tk_messageBox -message [string cat "\u00a9 2017-2019 Siep Kroonenberg
 
-GUI interface for TeX Live Manager
-Implemented in Tcl/Tk
-"]}
+" [__ "GUI interface for TeX Live Manager\nImplemented in Tcl/Tk"]]}
   .mn.help add command -label [__ "tlmgr help"] -command show_help
 
   # wallpaper frame
@@ -2050,27 +2080,41 @@ Implemented in Tcl/Tk
   ppack .showlogs -in .endbuttons -side right
 
   # various info
-  # frame .topf -background white -borderwidth 2 -relief sunken
   ppack [ttk::frame .topf] -in .bg -side top -anchor w -fill x
+
+  # left frame
+  ppack [ttk::frame .topfl] -in .topf -side left -anchor nw
+
+  ttk::label .topfl.llrepo -text [__ "Default repositories"] -anchor w
+  pgrid .topfl.llrepo -row 0 -column 0 -sticky nw
+  ttk::label .topfl.lrepos -text "" -justify left -anchor w
+  pgrid .topfl.lrepos -row 0 -column 1 -sticky nw
+  ttk::label .topfl.loaded -text [__ "Not loaded"] -foreground red -anchor w
+  pgrid .topfl.loaded -row 1 -column 1 -sticky w
+
+  ttk::label .topfl.lluptodate -text [__ "TL Manager up to date?"] -anchor w
+  pgrid .topfl.lluptodate -row 2 -column 0 -sticky w
+  ttk::label .topfl.luptodate -text [__ "Unknown"] -anchor w
+  pgrid .topfl.luptodate -row 2 -column 1 -sticky w
+
+  ttk::label .topfl.llcmd -text [__ "Last tlmgr command:"] -anchor w \
+      -wraplength [expr {60*$::cw}] -justify left
+  pgrid .topfl.llcmd -row 3 -column 0 -sticky w
+  ttk::label .topfl.lcmd -textvariable ::last_cmd -anchor w
+  pgrid .topfl.lcmd -row 3 -column 1 -sticky w
+
+  # right frame
+  ppack [ttk::frame .topfr] -in .topf -side right -anchor ne
+  if {$::tcl_platform(platform) eq "windows"} {
+    pack [ttk::label .topfr.ladmin] -side top -anchor e
+  }
+  pack [ttk::label .topfr.lroot] -side top -anchor e
+  .topfr.lroot configure -text [__ "Root at %s" $::instroot]
+  pack [ttk::label .topfr.linfra] -side top -anchor e
+  pack [ttk::label .topfr.lshell] -side top -anchor e
+
   pack [ttk::separator .sp -orient horizontal] \
       -in .bg -side top -fill x -pady 6
-
-  ttk::label .topf.llrepo -text [__ "Default repositories"] -anchor w
-  pgrid .topf.llrepo -row 0 -column 0 -sticky nw
-  ttk::label .topf.lrepos -text "" -justify left -anchor w
-  pgrid .topf.lrepos -row 0 -column 1 -sticky nw
-  ttk::label .topf.loaded -text [__ "Not loaded"] -foreground red -anchor w
-  pgrid .topf.loaded -row 1 -column 1 -sticky w
-
-  ttk::label .topf.lluptodate -text [__ "TL Manager up to date?"] -anchor w
-  pgrid .topf.lluptodate -row 2 -column 0 -sticky w
-  ttk::label .topf.luptodate -text [__ "Unknown"] -anchor w
-  pgrid .topf.luptodate -row 2 -column 1 -sticky w
-
-  ttk::label .topf.llcmd -anchor w -text [__ "Last tlmgr command:"] -anchor w
-  pgrid .topf.llcmd -row 3 -column 0 -sticky w
-  ttk::label .topf.lcmd -anchor w -textvariable ::last_cmd -anchor w
-  pgrid .topf.lcmd -row 3 -column 1 -sticky w
 
   # package list
   ttk::label .lpack -text [__ "Package list"] -font TkHeadingFont -anchor w
@@ -2129,7 +2173,7 @@ Implemented in Tcl/Tk
   pgrid .mrk_rem -in .pkfilter -column 4 -row $rw -sticky ew
   if $::do_restore {
     incr rw
-    ttk::button .mrk_rest -text [__ "Restore from backup..."] -command \
+    ttk::button .mrk_rest -text "[__ "Restore from backup"] ..." -command \
         restore_backups_dialog
     pgrid .mrk_rest -in .pkfilter -column 4 -row $rw -sticky ew
   }
@@ -2162,8 +2206,8 @@ Implemented in Tcl/Tk
       -yscrollcommand {.pkvsb set}
   .pkglist heading mk -text "" -anchor w
   .pkglist heading name -text [__ "Name"] -anchor w
-  .pkglist heading localrev -text [__ "Local Rev. (ver.)"] -anchor w
-  .pkglist heading remoterev -text [__ "Remote Rev. (ver.)"] -anchor w
+  .pkglist heading localrev -text [__ "Local rev. (ver.)"] -anchor w
+  .pkglist heading remoterev -text [__ "Remote rev. (ver.)"] -anchor w
   .pkglist heading shortdesc -text [__ "Description"] -anchor w
   .pkglist column mk -width [expr {$::cw * 3}] -stretch 0
   .pkglist column name -width [expr {$::cw * 25}] -stretch 1
@@ -2247,6 +2291,9 @@ proc initialize {} {
     lappend ::langs [string range [file tail $l] 0 end-3]
   }
 
+  # store language in tlmgr configuration
+  set_language_no_restart $::lang
+
   # in case we are going to do something with json:
   # add json subdirectory to auto_path, but at low priority
   # since the tcl/tk installation may already have a better implementation.
@@ -2256,10 +2303,32 @@ proc initialize {} {
 
   populate_main
 
+  # testing writablilty earlier led to sizing problems
+  if {! [file writable $::instroot]} {
+    set ans [tk_messageBox -type yesno -icon warning -message \
+         [__ "%s is not writable. You can probably not do much.
+  Are you sure you want to continue?" $::instroot]]
+    if {$ans ne "yes"} {exit}
+  }
+
   start_tlmgr
+  if {$::tcl_platform(platform) eq "windows"} {
+    run_cmd_waiting "option multiuser"
+    set ::multiuser 0
+    foreach l $::out_log {
+      if [regexp {^\s*multiuser\s+([01])\s*$} $l d ::multiuser] break
+    }
+    .topfr.ladmin configure -text \
+        [expr {$::multiuser ? [__ "Multi-user"] : [__ "Single-user"]}]
+  }
   get_repos_from_tlmgr
-  .topf.lrepos configure -text [print_repos]
+  .topfl.lrepos configure -text [print_repos]
   get_packages_info_local
+  # svns for  tlmgr and tlshell
+  .topfr.linfra configure -text \
+      "tlmgr: r[dict get $::pkgs texlive.infra localrev]"
+  .topfr.lshell configure -text \
+      "tlshell: r[dict get $::pkgs tlshell localrev]"
   collect_filtered ; # invokes display_packages_info
   selective_dis_enable
 }; # initialize
