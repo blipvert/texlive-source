@@ -4295,7 +4295,7 @@ number_multiply_int (internal_value (mp_default_color_model), mp_rgb_model);
 number_clone (internal_value (mp_restore_clip_color), unity_t);
 number_clone (internal_value (mp_hppp), unity_t);
 number_clone (internal_value (mp_vppp), unity_t);
-set_internal_string (mp_output_template, mp_intern (mp, "%j.%c"));
+set_internal_string (mp_output_template, mp_intern (mp, "%j.%c.%o"));
 set_internal_string (mp_output_filename, mp_intern (mp, ""));
 set_internal_string (mp_output_format, mp_intern (mp, "eps"));
 set_internal_string (mp_output_format_options, mp_intern (mp, ""));
