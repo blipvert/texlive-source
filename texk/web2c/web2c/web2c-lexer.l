@@ -1,4 +1,5 @@
 %option never-interactive
+%option yylineno
 
 %top{
 /* web2c-lexer.l -- lexical analysis for Tangle output.  Public domain. */
@@ -319,6 +320,7 @@ yyerror (const_string s)
 	break;
       }
   fputs (").\n", stderr);
+  fprintf (stderr, "Failed on line %d\n", yylineno);
   exit (1);
 
   /* Avoid silly warnings.  */
